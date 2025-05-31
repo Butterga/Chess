@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Canvas Chess Game</title>
+  <style>
+    body {
+      background-color: #111;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      font-family: Arial, sans-serif;
+    }
+    #gameContainer {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      border: 2px solid white;
+      background: radial-gradient(#ccc, #aaa);
+      box-shadow: 5px 5px 15px rgba(0,0,0,0.5);
+      cursor: pointer;
+      touch-action: manipulation;
+      width: 90vw;
+      max-width: 480px;
+      height: auto;
+    }
+    #turnDisplay, #timerDisplay {
+      margin: 10px;
+      font-size: 20px;
+      text-align: center;
+    }
+    #overlay {
+      position: fixed;
+      top:0;
+      left:0;
+      width:100%;
+      height:100%;
+      background:rgba(0,0,0,0.85);
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      flex-direction:column;
+      color:white;
+      font-size:24px;
+      display:none;
+    }
+    #overlay button, #startBtn, #undoBtn {
+      margin-top:10px;
+      padding:10px 20px;
+      font-size:18px;
+      cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="turnDisplay">Click Start to Play</div>
+  <div id="timerDisplay"></div>
+  <canvas id="chessBoard" width="480" height="480"></canvas>
+  <button id="startBtn">Start Game</button>
+  <button id="undoBtn" style="display:none">Undo Move</button>
+  <div id="overlay">
+    <div id="overlayText"></div>
+    <button onclick="location.reload()">Reset Game</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('chessBoard');
+    const ctx = canvas.getContext('2d');
+    const size = 60;
+    let board = [];
+    let selected = null;
+    let currentTurn = 'white';
+    let gameOver = false;
+    let started = false;
+    let legalMoves = [];
+    let timer = 0;
+    let timerInterval;
+    let moveHistory = [];
+
+    const pieces = {
+      'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
+      'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙'
+    };
+
+    function initBoard() {
+      board = [
+        ['r','n','b','q','k','b','n','r'],
+        ['p','p','p','p','p','p','p','p'],
+        [null,null,null,null,null,null,null,null],
+        [null,null,null,null,null,null,null,null],
+        [null,null,null,null,null,null,null,null],
+        [null,null,null,null,null,null,null,null],
+        ['P','P','P','P','P','P','P','P'],
+        ['R','N','B','Q','K','B','N','R']
+      ];
+      moveHistory = [];
+    }
+
+    function drawBoard() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          ctx.fillStyle = (r + c) % 2 === 0 ? '#f0d9b5' : '#b58863';
+          ctx.fillRect(c * size, r * size, size, size);
+
+          if (legalMoves.some(m => m.r === r && m.c === c)) {
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+            ctx.fillRect(c * size, r * size, size, size);
+          }
+
+          const piece = board[r][c];
+          if (piece) {
+            ctx.font = '40px serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 4;
+            ctx.fillStyle = /[A-Z]/.test(piece) ? 'white' : 'black';
+            ctx.fillText(pieces[piece], c * size + size / 2, r * size + size / 2);
+            ctx.shadowBlur = 0;
+          }
+        }
+      }
+    }
+
+    function isWhite(piece) {
+      return /[A-Z]/.test(piece);
+    }
+
+    function inBounds(r, c) {
+      return r >= 0 && r < 8 && c >= 0 && c < 8;
+    }
+
+    function getLegalMoves(r, c) {
+      let moves = [];
+      for (let r2 = 0; r2 < 8; r2++) {
+        for (let c2 = 0; c2 < 8; c2++) {
+          if (isLegalMove(r, c, r2, c2)) moves.push({r: r2, c: c2});
+        }
+      }
+      return moves;
+    }
+
+    function animateMove(fromR, fromC, toR, toC, piece) {
+      const frames = 10;
+      let frame = 0;
+      const dx = (toC - fromC) * size / frames;
+      const dy = (toR - fromR) * size / frames;
+      const sx = fromC * size + size / 2;
+      const sy = fromR * size + size / 2;
+      function drawFrame() {
+        drawBoard();
+        ctx.font = '40px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = /[A-Z]/.test(piece) ? 'white' : 'black';
+        ctx.fillText(pieces[piece], sx + dx * frame, sy + dy * frame);
+        if (frame < frames) {
+          frame++;
+          requestAnimationFrame(drawFrame);
+        } else {
+          moveHistory.push(JSON.parse(JSON.stringify(board)));
+          board[toR][toC] = piece;
+          board[fromR][fromC] = null;
+          drawBoard();
+          if (piece.toLowerCase() === 'k' && board[toR][toC] === piece) {
+            gameOver = true;
+            clearInterval(timerInterval);
+            document.getElementById('overlayText').innerText = `${currentTurn} wins!`;
+            document.getElementById('overlay').style.display = 'flex';
+          } else {
+            currentTurn = currentTurn === 'white' ? 'black' : 'white';
+            document.getElementById('turnDisplay').innerText = `${currentTurn.charAt(0).toUpperCase() + currentTurn.slice(1)}'s Turn`;
+          }
+        }
+      }
+      drawFrame();
+    }
+
+    function isLegalMove(r1, c1, r2, c2) {
+      const piece = board[r1][c1];
+      if (!piece) return false;
+      const target = board[r2][c2];
+      if (!inBounds(r2, c2) || (target && isWhite(target) === isWhite(piece))) return false;
+      const dr = r2 - r1, dc = c2 - c1;
+      const absDr = Math.abs(dr), absDc = Math.abs(dc);
+      const direction = isWhite(piece) ? -1 : 1;
+      switch (piece.toLowerCase()) {
+        case 'p':
+          if (dc === 0 && !target) {
+            if (dr === direction || (dr === 2 * direction && ((r1 === 1 && !isWhite(piece)) || (r1 === 6 && isWhite(piece))) && !board[r1 + direction][c1])) return true;
+          } else if (absDc === 1 && dr === direction && target) return true;
+          break;
+        case 'r': if (dr === 0 || dc === 0) return isClearPath(r1, c1, r2, c2);
+        case 'n': if (absDr * absDc === 2) return true;
+        case 'b': if (absDr === absDc) return isClearPath(r1, c1, r2, c2);
+        case 'q': if (dr === 0 || dc === 0 || absDr === absDc) return isClearPath(r1, c1, r2, c2);
+        case 'k': if (absDr <= 1 && absDc <= 1) return true;
+      }
+      return false;
+    }
+
+    function isClearPath(r1, c1, r2, c2) {
+      const dr = Math.sign(r2 - r1), dc = Math.sign(c2 - c1);
+      let r = r1 + dr, c = c1 + dc;
+      while (r !== r2 || c !== c2) {
+        if (board[r][c]) return false;
+        r += dr;
+        c += dc;
+      }
+      return true;
+    }
+
+    canvas.addEventListener('click', e => {
+      if (!started || gameOver) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.floor((e.clientX - rect.left) / (rect.width / 8));
+      const y = Math.floor((e.clientY - rect.top) / (rect.height / 8));
+      const piece = board[y][x];
+      if (selected) {
+        if (isLegalMove(selected.y, selected.x, y, x)) {
+          animateMove(selected.y, selected.x, y, x, board[selected.y][selected.x]);
+        }
+        selected = null;
+        legalMoves = [];
+      } else if (piece && isWhite(piece) === (currentTurn === 'white')) {
+        selected = {x, y};
+        legalMoves = getLegalMoves(y, x);
+      }
+      drawBoard();
+    });
+
+    document.getElementById('startBtn').addEventListener('click', () => {
+      initBoard();
+      drawBoard();
+      started = true;
+      document.getElementById('turnDisplay').innerText = "White's Turn";
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('undoBtn').style.display = 'inline-block';
+      timer = 0;
+      timerInterval = setInterval(() => {
+        timer++;
+        document.getElementById('timerDisplay').innerText = `Time: ${timer} sec`;
+      }, 1000);
+    });
+
+    document.getElementById('undoBtn').addEventListener('click', () => {
+      if (moveHistory.length > 0) {
+        board = moveHistory.pop();
+        currentTurn = currentTurn === 'white' ? 'black' : 'white';
+        drawBoard();
+        document.getElementById('turnDisplay').innerText = `${currentTurn.charAt(0).toUpperCase() + currentTurn.slice(1)}'s Turn`;
+      }
+    });
+  </script>
+</body>
+</html>
